@@ -19,14 +19,21 @@
 #define GPSSerial Serial1
 #define GPSECHO false
 
+#define BTN_PIN 5
+
 Adafruit_LIS3DH lis = Adafruit_LIS3DH();
 
 Adafruit_GPS GPS(&GPSSerial);
-uint32_t GPS_timer = millis();
-uint32_t hb_timer = millis();
-uint32_t acc_timer = millis();
-uint32_t btn_timer = millis();
-uint32_t emergency_timer = millis();
+
+unsigned long acc_timer = millis();
+unsigned long hb_timer = millis();
+unsigned long btn_timer = millis();
+unsigned long GPS_timer = millis();
+
+const int AccelerometerTaskDelay = 100;
+const int HeartbeatTaskDelay = 2000;
+const int EmergencyBtnTaskDelay = 250;
+const int GPSTaskDelay = 3000;
 
 bool emergencyBtn = 0;
 bool falling = 0;
@@ -37,8 +44,6 @@ float gps_speed = 0;
 float gps_altitude = 0;
 
 int tmp_array[2] = {0, 0};
-
-int BTN_PIN = 5;
 
 // TTN Configuration
 static const u1_t PROGMEM APPEUI[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
@@ -60,7 +65,7 @@ static osjob_t sendjob;
 
 // Schedule TX every this many seconds (might become longer due to duty
 // cycle limitations).
-const unsigned TX_INTERVAL = 1;
+const unsigned TX_INTERVAL = 7;
 
 // Pin mapping for Adafruit Feather M0 LoRa
 const lmic_pinmap lmic_pins = {
@@ -73,86 +78,10 @@ const lmic_pinmap lmic_pins = {
     .spi_freq = 8000000,
 };
 
-void onEvent (ev_t ev) {
-    switch(ev) {
-        case EV_SCAN_TIMEOUT:
-            Serial.println(F("EV_SCAN_TIMEOUT"));
-            break;
-        case EV_BEACON_FOUND:
-            Serial.println(F("EV_BEACON_FOUND"));
-            break;
-        case EV_BEACON_MISSED:
-            Serial.println(F("EV_BEACON_MISSED"));
-            break;
-        case EV_BEACON_TRACKED:
-            Serial.println(F("EV_BEACON_TRACKED"));
-            break;
-        case EV_JOINING:
-            Serial.println(F("EV_JOINING"));
-            break;
-        case EV_JOINED:
-            Serial.println(F("EV_JOINED"));
-         
-            LMIC_setLinkCheckMode(0);
-            break;
-        case EV_JOIN_FAILED:
-            Serial.println(F("EV_JOIN_FAILED"));
-            break;
-        case EV_REJOIN_FAILED:
-            Serial.println(F("EV_REJOIN_FAILED"));
-            break;
-        case EV_TXCOMPLETE:            
-            Serial.println(F("Payload sent successfully"));
-            // Schedule next transmission
-            os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL), do_send);
-            break;
-        case EV_LOST_TSYNC:
-            Serial.println(F("EV_LOST_TSYNC"));
-            break;
-        case EV_RESET:
-            Serial.println(F("EV_RESET"));
-            break;
-        case EV_RXCOMPLETE:
-            // data received in ping slot
-            Serial.println(F("EV_RXCOMPLETE"));
-            break;
-        case EV_LINK_DEAD:
-            Serial.println(F("EV_LINK_DEAD"));
-            break;
-        case EV_LINK_ALIVE:
-            Serial.println(F("EV_LINK_ALIVE"));
-            break;
-        case EV_TXSTART:
-            Serial.println(F("Starting new transmission"));
-            break;
-        default:
-            Serial.println(F("ERROR: Unknown event"));
-            break;
-}
-}
-
-void do_send(osjob_t* j){
-    // Check if there is not a current TX/RX job running
-    if (LMIC.opmode & OP_TXRXPEND) {
-        //Serial.println(F("OP_TXRXPEND, not sending"));
-    } 
-    else {
-        // prepare upstream data transmission at the next possible time.
-        // transmit on port 1 (the first parameter); you can use any value from 1 to 223 (others are reserved).
-        // don't request an ack (the last parameter, if not zero, requests an ack from the network).
-        // Remember, acks consume a lot of network resources; don't ask for an ack unless you really need it.
-        LMIC_setTxData2(1, payload, sizeof(payload)-1, 0);
-        emergencyBtn = 0;
-        falling = 0;
-    }
-    // Next TX is scheduled after TX_COMPLETE event.
-}
-
 void setup() {
     delay(1000);
     while (! Serial);
     Serial.begin(115200);
-    //Serial.println(F("Starting Wearable Safety Tracker Program ..."));
 
     Wire.begin();
     lis.begin(0x19);
@@ -190,54 +119,136 @@ void loop() {
     // will want to call `os_runloop_once()` every so often, to keep the radio running.
     os_runloop_once();
 
-    if (millis() - acc_timer > 100){
-      acc_timer = millis();
-      lis.read();
-      sensors_event_t event;
-      lis.getEvent(&event);
-      double acc = sqrt(pow(event.acceleration.x,2) + pow(event.acceleration.y,2)+ pow(event.acceleration.z,2))-9.81;
-      if (acc >= 18){
-        falling = 1;
-      }
-      payload[14] = falling;
+    if (millis() - acc_timer > AccelerometerTaskDelay) {
+        readAccelerometerData();
     }
 
-    // read the heart beat sensor
-    if (millis() - hb_timer > 2000) {
-      hb_timer = millis();
-//      Serial.println("Reading heartbeat sensor ...");
-      Wire.requestFrom(0xA0 >> 1, 1);    // request 1 bytes from slave device
-      Wire.available();         
-      unsigned char hb = Wire.read();   // receive heart rate value (a byte)
-//      Serial.println(hb);
-      payload[0] = hb;
+    if (millis() - hb_timer > HeartbeatTaskDelay) {
+        readHeartbeat();
     }
     
-    // read the button state
-  if (millis() - btn_timer > 250) {
-      btn_timer = millis();
-      byte btn = digitalRead(BTN_PIN);
-      if (btn == 1){
-        emergencyBtn = 1;
-      }
-//      Serial.print("Button value: ");
-//      Serial.println(emergencyBtn);
-      payload[1] = emergencyBtn;
+    if (millis() - btn_timer > EmergencyBtnTaskDelay) {
+        readEmergencyBtn();
     }
     
     //GPS Loop
     char c = GPS.read();
     if (GPS.newNMEAreceived()) {
-//      Serial.print(GPS.lastNMEA()); 
       if (!GPS.parse(GPS.lastNMEA())) 
         return;
     }
-    if (millis() - GPS_timer > 3000) {
-      GPS_timer = millis(); // reset the timer
-      uint8_t GPS_quality = GPS.fixquality;
-      payload[13] = GPS_quality;
-      
-      if (GPS.fix) {
+    if (millis() - GPS_timer > GPSTaskDelay) {
+        readGPS();
+    }
+}
+
+void onEvent (ev_t ev) {
+    switch(ev) {
+        case EV_SCAN_TIMEOUT:
+            Serial.println(F("EV_SCAN_TIMEOUT"));
+            break;
+        case EV_BEACON_FOUND:
+            Serial.println(F("EV_BEACON_FOUND"));
+            break;
+        case EV_BEACON_MISSED:
+            Serial.println(F("EV_BEACON_MISSED"));
+            break;
+        case EV_BEACON_TRACKED:
+            Serial.println(F("EV_BEACON_TRACKED"));
+            break;
+        case EV_JOINING:
+            Serial.println(F("EV_JOINING"));
+            break;
+        case EV_JOINED:
+            Serial.println(F("EV_JOINED"));
+            LMIC_setLinkCheckMode(0);
+            break;
+        case EV_JOIN_FAILED:
+            Serial.println(F("EV_JOIN_FAILED"));
+            break;
+        case EV_REJOIN_FAILED:
+            Serial.println(F("EV_REJOIN_FAILED"));
+            break;
+        case EV_TXCOMPLETE:            
+            Serial.println(F("Payload sent successfully"));
+            // Schedule next transmission
+            os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL), do_send);
+            break;
+        case EV_LOST_TSYNC:
+            Serial.println(F("EV_LOST_TSYNC"));
+            break;
+        case EV_RESET:
+            Serial.println(F("EV_RESET"));
+            break;
+        case EV_RXCOMPLETE:
+            // data received in ping slot
+            Serial.println(F("EV_RXCOMPLETE"));
+            break;
+        case EV_LINK_DEAD:
+            Serial.println(F("EV_LINK_DEAD"));
+            break;
+        case EV_LINK_ALIVE:
+            Serial.println(F("EV_LINK_ALIVE"));
+            break;
+        case EV_TXSTART:
+            Serial.println(F("Starting new transmission"));
+            break;
+        default:
+            Serial.println(F("ERROR: Unknown event"));
+            break;
+    }
+}
+
+void do_send(osjob_t* j){
+    // Check if there is not a current TX/RX job running
+    if (LMIC.opmode & OP_TXRXPEND) {
+        Serial.println(F("OP_TXRXPEND, not sending"));
+    } 
+    else {
+        // prepare upstream data transmission at the next possible time.
+        // transmit on port 1 (the first parameter); you can use any value from 1 to 223 (others are reserved).
+        // don't request an ack (the last parameter, if not zero, requests an ack from the network).
+        // Remember, acks consume a lot of network resources; don't ask for an ack unless you really need it.
+        LMIC_setTxData2(1, payload, sizeof(payload)-1, 0);
+        emergencyBtn = 0;
+        falling = 0;
+    }
+    // Next TX is scheduled after TX_COMPLETE event.
+}
+
+void floatToTwoInt (int myArray[], float myValue){
+    int firstPart = myValue;
+    myArray[0] = firstPart;
+    myValue -= firstPart;
+    int secondPart = myValue * 10000;
+    myArray[1] = secondPart;
+}
+
+void readHeartbeat() {
+    if (millis() - hb_timer > 2000) {
+        hb_timer = millis();
+        Wire.requestFrom(0xA0 >> 1, 1);    // request 1 bytes from slave device
+        Wire.available();         
+        unsigned char hb = Wire.read();   // receive heart rate value (a byte)
+        payload[0] = hb;
+    }
+}
+
+void readEmergencyBtn() {
+    btn_timer = millis();
+    byte btn = digitalRead(BTN_PIN);
+    if (btn == 1){
+        emergencyBtn = 1;
+    }
+    payload[1] = emergencyBtn;
+}
+
+void readGPS() {
+    GPS_timer = millis();
+    uint8_t GPS_quality = GPS.fixquality;
+    payload[13] = GPS_quality;
+  
+    if (GPS.fix) {
         gps_latitude = GPS.latitudeDegrees;
         gps_longitude = GPS.longitudeDegrees;
         gps_speed = GPS.speed;
@@ -264,45 +275,42 @@ void loop() {
         payload[11] = highByte(payload_alt);
 
         payload[12] = gps_satellites;
-      }
     }
 }
 
-void displayData(){
-  Serial.print("BPM: ");
-  Serial.println(payload[0]);
-
-  Serial.print("Emergency: ");
-  Serial.println(payload[1]);
-
-  Serial.print("Latitude: ");
-  Serial.print(gps_latitude);
-  Serial.print("      ");
-  Serial.print("Longitude: ");
-  Serial.print(gps_longitude);
-  Serial.print("      ");
-  Serial.print("Speed (Knots): ");
-  Serial.print(gps_speed);
-  Serial.print("      ");
-  Serial.print("Altitude: ");
-  Serial.print(gps_altitude);
-  Serial.print("      ");
-  Serial.print("Satellites: ");
-  Serial.print(payload[12]);
-  Serial.print("      ");
-  Serial.print("Signal: ");
-  Serial.println(payload[13]);
-
-  Serial.print("Falling: ");
-  Serial.println(payload[14]);
-
-  Serial.println("-----------------");
+void readAccelerometerData() {
+    acc_timer = millis();
+    lis.read();
+    sensors_event_t event;
+    lis.getEvent(&event);
+    double acc = sqrt(pow(event.acceleration.x,2) + pow(event.acceleration.y,2)+ pow(event.acceleration.z,2))-9.81;
+    if (acc >= 18)
+        falling = 1;
+    payload[14] = falling;
 }
 
-void floatToTwoInt (int myArray[], float myValue){
-  int firstPart = myValue;
-  myArray[0] = firstPart;
-  myValue -= firstPart;
-  int secondPart = myValue * 10000;
-  myArray[1] = secondPart;
+void displayData(){
+    Serial.print("BPM: ");
+    Serial.println(payload[0]);
+
+    Serial.print("Emergency: ");
+    Serial.println(payload[1]);
+
+    Serial.print("Latitude: ");
+    Serial.print(gps_latitude);
+    Serial.print(" | Longitude: ");
+    Serial.print(gps_longitude);
+    Serial.print(" | Speed (Knots): ");
+    Serial.print(gps_speed);
+    Serial.print(" | Altitude: ");
+    Serial.print(gps_altitude);
+    Serial.print(" | Satellites: ");
+    Serial.print(payload[12]);
+    Serial.print(" | Signal: ");
+    Serial.println(payload[13]);
+
+    Serial.print(" | Falling: ");
+    Serial.println(payload[14]);
+
+    Serial.println("-----------------");
 }
