@@ -42,33 +42,31 @@ function Decoder(bytes, port) {
     decoded.fall = rawFall;
     
     return decoded;
-  }
-  
-  function sflt162f(rawSflt16)
-      {
-  
-      // throw away high bits for repeatability.
-      rawSflt16 &= 0xFFFF;
-  
-      // special case minus zero:
-      if (rawSflt16 == 0x8000)
-          return -0.0;
-  
-      // extract the sign.
-      var sSign = ((rawSflt16 & 0x8000) != 0) ? -1 : 1;
-      
-      // extract the exponent
-      var exp1 = (rawSflt16 >> 11) & 0xF;
-  
-      // extract the "mantissa" (the fractional part)
-      var mant1 = (rawSflt16 & 0x7FF) / 2048.0;
-  
-      // convert back to a floating point number. We hope 
-      // that Math.pow(2, k) is handled efficiently by
-      // the JS interpreter! If this is time critical code,
-      // you can replace by a suitable shift and divide.
-      var f_unscaled = sSign * mant1 * Math.pow(2, exp1 - 15);
-  
-      return f_unscaled;
-      }
+}
+
+function sflt162f(rawSflt16) {
+  // throw away high bits for repeatability.
+  rawSflt16 &= 0xFFFF;
+
+  // special case minus zero:
+  if (rawSflt16 == 0x8000)
+      return -0.0;
+
+  // extract the sign.
+  var sSign = ((rawSflt16 & 0x8000) != 0) ? -1 : 1;
+
+  // extract the exponent
+  var exp1 = (rawSflt16 >> 11) & 0xF;
+
+  // extract the "mantissa" (the fractional part)
+  var mant1 = (rawSflt16 & 0x7FF) / 2048.0;
+
+  // convert back to a floating point number. We hope 
+  // that Math.pow(2, k) is handled efficiently by
+  // the JS interpreter! If this is time critical code,
+  // you can replace by a suitable shift and divide.
+  var f_unscaled = sSign * mant1 * Math.pow(2, exp1 - 15);
+
+  return f_unscaled;
+}
   
