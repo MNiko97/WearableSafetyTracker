@@ -11,3 +11,18 @@ The following libraries must be installed in order to compile the code:
 
 ## Run
 Connect the device to power and run the RED-Node server to open the UI
+
+## Wiring 
+![](Wiring.png)
+
+## Prototype
+![](Microcontroller_schematic.png)
+
+## RED-Node Graphical User Interface
+![](red_node_ui .jpg)
+
+## Hardware Architecture
+![](Hardware_Architecture.png)
+
+## Power Performance
+![](consumption.png)
