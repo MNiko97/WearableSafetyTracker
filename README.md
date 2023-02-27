@@ -16,7 +16,7 @@ Connect the device to power and run the RED-Node server to open the UI
 ![](Wiring.png)
 
 ## Prototype
-![](Microcontroller_schematic.jpg)
+![](Prototype.jpg)
 
 ## RED-Node Graphical User Interface
 ![](red_node_ui.png)
